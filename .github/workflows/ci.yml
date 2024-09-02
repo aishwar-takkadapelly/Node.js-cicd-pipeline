@@ -1,0 +1,124 @@
+name: Node.js CD with Docker
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm' # or 'yarn' if you're using Yarn
+
+      - name: Install dependencies
+        run: npm install # or 'yarn install' if you're using Yarn
+
+      - name: Build application
+        run: npm run build # or the specific build command for your app
+
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm' # or 'yarn'
+
+      - name: Install dependencies
+        run: npm install # or 'yarn install'
+
+      - name: Run tests
+        run: npm test -- --passWithNoTests # or 'yarn test --passWithNoTests'
+
+  package:
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm' # or 'yarn'
+
+      - name: Install dependencies
+        run: npm install # or 'yarn install'
+
+      - name: Build application
+        run: npm run build # or the specific build command for your app
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/nodejs-app:latest .
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWD }}
+
+      - name: Push Docker image
+        run: |
+          docker push ${{ secrets.DOCKER_USERNAME }}/nodejs-app:latest
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: package
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v0.1.8
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          script: |
+            # Ensure Docker is installed
+            if ! command -v docker &> /dev/null; then
+              echo "Docker not found, installing..."
+              sudo yum update -y
+              sudo yum install -y docker
+              sudo systemctl start docker
+              sudo systemctl enable docker
+              sudo usermod -aG docker $USER
+            fi
+
+            # Pull Docker image and run container
+            echo "Pulling Docker image..."
+            sudo docker pull ${{ secrets.DOCKER_USERNAME }}/nodejs-app:latest
+
+            echo "Stopping and removing old container..."
+            sudo docker stop nodejs-app || true
+            sudo docker rm nodejs-app || true
+
+            echo "Running new container..."
+            sudo docker run -d -p 3000:80 --name nodejs-app ${{ secrets.DOCKER_USERNAME }}/nodejs-app:latest
+          timeout: 30s
+          command_timeout: 10m
+          debug: false
